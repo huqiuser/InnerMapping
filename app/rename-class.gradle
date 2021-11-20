@@ -1,0 +1,113 @@
+class RenameMapping {
+    static Map<String, String> getMapping(project) {
+        //配置哪些类需要被重命名为随机类名
+        File renameFile = project.file("${project.projectDir}${File.separator}rename-class.txt")
+
+        //通过renameFile生成proguard需要的mapping文件
+        File mappingFile = project.file("${project.buildDir}${File.separator}outputs${File.separator}rename-mapping.txt")
+
+        //mapping文件的映射关系
+        Map<String, String> renameMap
+
+        if (mappingFile.exists()) {
+            renameMap = loadMapping(mappingFile)
+        } else {
+            renameMap = generateMapping(renameFile)
+            saveMapping(renameMap, mappingFile)
+        }
+
+        return renameMap
+    }
+
+    private static Map<String, String> loadMapping(File file) {
+        Map<String, String> mapping = new LinkedHashMap<String, String>()
+        def lines = file.readLines()
+        for (line in lines) {
+            def entry = line.split("->")
+            if (entry.length != 2) {
+                continue
+            }
+
+            def key = entry[0].trim()
+            def value = entry[1].trim()
+            def values = value.split(":")
+            if (values.length != 1) {
+                continue
+            }
+
+            mapping.put(key, values[0])
+        }
+
+        return mapping
+    }
+
+    private static Map<String, String> generateMapping(File renameFile) {
+        def renameClassList = renameFile.readLines("UTF-8")
+        Map<String, String> renameMap = new LinkedHashMap<String, String>()
+
+        Random random = new Random()
+        for (int classIndex = 0; classIndex < renameClassList.size(); classIndex++) {
+            // 类名为类索引+时间戳+不超过10个数字
+            def name = String.format("%0${(renameClassList.size() - 1 + "").length()}d", classIndex)
+            name += new Date().format("yyyyMMddHHmmss", TimeZone.getDefault())
+            int randomLength = random.nextInt(10)
+            for (int randomIndex = 0; randomIndex < randomLength; randomIndex++) {
+                name += random.nextInt(10)
+            }
+
+            // 把类名转换为字母
+            def className = "";
+            def diff = random.nextInt(26 - 10 + 1)
+            for (ch in name) {
+                className += (char)((int)ch - (int)'0' + (int)'a' + diff)
+            }
+
+            def classFullName = renameClassList[classIndex]
+            if (classFullName.length() <= 0) {
+                continue
+            }
+
+            def newClassName = "a.a.a.a.a." + className.capitalize()
+            renameMap.put(classFullName, newClassName)
+        }
+
+        return renameMap
+    }
+
+    private static saveMapping(Map<String, String> inMapping, File outFile) {
+        def mappingContent = ""
+        for (entry in inMapping.entrySet()) {
+            mappingContent += entry.key + " -> " + entry.value + ":\n"
+        }
+
+        outFile.getParentFile().mkdirs()
+        outFile.createNewFile()
+        outFile.write(mappingContent, "UTF-8")
+    }
+}
+
+//修改AndroidManifest
+android.applicationVariants.all { variant ->
+   // if ("release".equals(variant.buildType.name)) {
+        variant.outputs.each { output ->
+            def manifestTask = output.processManifestProvider.get()
+            manifestTask.doLast {
+                def manifestFile = manifestOutputDirectory.file("AndroidManifest.xml").get().asFile
+                def renameMap = RenameMapping.getMapping(project)
+
+                def xml = new XmlParser().parse(manifestFile)
+                xml."application"[0].children().each {  component ->
+                    component.attributes().each { entry ->
+                        if (renameMap.containsKey(entry.value) && entry.key.localPart.equals("name")) {
+                            entry.value = renameMap[entry.value]
+                        }
+                    }
+                }
+
+                def outPrintWriter = new PrintWriter(manifestFile, 'UTF-8')
+                new XmlNodePrinter(outPrintWriter).print(xml)
+                outPrintWriter.close()
+            }
+        }
+   // }
+}
